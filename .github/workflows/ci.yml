@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.app
+      - name: Build
+        run: swift build
+      - name: Test
+        run: swift test
+      # Only the release configuration compiles the `#else` branches, so only
+      # this build shows that Release code does not reference a DEBUG-only
+      # member.
+      - name: Build release
+        run: swift build -c release
+      - name: Lint
+        run: |
+          swift format lint --strict --recursive Sources Tests
+      # The README tells other people to run this reference check in their own
+      # CI. Its version parsing has to match `AppVersion`, and no other step
+      # here would catch a difference.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "26"
+      - name: Verify the config check
+        run: node --test scripts/

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+		No tracking. Neither request carries anything about the user. One asks
+		the host app's own site for a version floor, and the other asks Apple
+		about a public App Store id. Nothing reads the IDFA or sets a cross-app
+		identifier.
+	-->
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<!--
+		Nothing is collected and nothing leaves the device beyond those two
+		requests. The caches and the dismissal stay in the suite the host
+		supplies.
+	-->
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<!--
+			The store keeps two cached blobs, two timestamps and one dismissed
+			version under a caller-supplied key prefix. The host supplies the
+			storage, so both reasons are declared. `UserDefaults.standard` is
+			the parameter default (CA92.1). A host that wants its extensions
+			to read the same gate passes an App Group suite (1C8F.1).
+
+			Nothing here reads a key written by another app or the system.
+		-->
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+				<string>1C8F.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

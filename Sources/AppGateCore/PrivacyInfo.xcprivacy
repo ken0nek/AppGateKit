@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+		No tracking. Nothing here reads the IDFA, sets a cross-app identifier
+		or contacts a network. This module imports Foundation and nothing else.
+	-->
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<!--
+		Nothing is collected. The host supplies every input and receives every
+		output as a return value. Nothing leaves the device.
+	-->
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<!--
+		Empty by design. This module has no storage, no clock and no network.
+		The `UserDefaults` access that needs reason CA92.1 is in the client
+		module, which declares it in its own manifest.
+	-->
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array/>
+</dict>
+</plist>

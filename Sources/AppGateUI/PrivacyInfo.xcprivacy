@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+		No tracking. This module makes no network request of its own, reads no
+		IDFA and sets no cross-app identifier. It presents views the host
+		supplies, using state the client module computed.
+	-->
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<!--
+		Nothing is collected. This module sends no analytics. The host sends
+		its own from the views it supplies.
+	-->
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<!--
+		Empty by design. This module has no storage of its own. The
+		`UserDefaults` access that needs reason CA92.1 is in the client module,
+		which declares it in its own manifest.
+	-->
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array/>
+</dict>
+</plist>

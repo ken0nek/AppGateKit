@@ -17,6 +17,20 @@ It does three things:
 Other names for this are force update, kill switch, minimum supported version
 and update gate.
 
+## Installation
+
+```swift
+.package(url: "https://github.com/ken0nek/AppGateKit", from: "1.0.0")
+```
+
+Add the products you use to your target:
+
+```swift
+.product(name: "AppGateCore", package: "AppGateKit"),
+.product(name: "AppGateClient", package: "AppGateKit"),
+.product(name: "AppGateUI", package: "AppGateKit"),
+```
+
 ## Status
 
 1.0.0 is the first release. The package follows semantic versioning.

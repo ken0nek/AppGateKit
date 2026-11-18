@@ -1,5 +1,5 @@
 version: 1
 builder:
   configs:
-    - documentation_targets: [AppGateCore, AppGateClient]
+    - documentation_targets: [AppGateCore, AppGateClient, AppGateUI]
       platform: ios

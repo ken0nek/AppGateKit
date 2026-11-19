@@ -10,8 +10,10 @@ import Foundation
 ///
 /// 1. Every field is `Optional`, on the server and in this type, permanently.
 ///    A shipped build has to decode a cached blob that a different shape
-///    wrote. Synthesized `Decodable` ignores property defaults, so only an
-///    `Optional` survives a missing field.
+///    wrote. A missing field and a field of the wrong type both read as
+///    `nil`, and neither fails the fields beside it. A field's JSON type is
+///    still frozen: builds before this rule reject the whole config when one
+///    value has the wrong type, and keep their previous cache.
 /// 2. Unknown fields are ignored, so a field added later cannot break an older
 ///    build's decode. This type ignores them by not declaring them.
 /// 3. The config carries no user-facing text. A string here could only be in
@@ -33,6 +35,23 @@ public struct AppGateConfig: Decodable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case minSupported = "min_supported"
         case featureFloors = "feature_floors"
+    }
+
+    /// Decodes each field on its own. Synthesized decoding would fail every
+    /// field when one value has the wrong type.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        minSupported = try? container.decode(String.self, forKey: .minSupported)
+        let floors = try? container.decode([String: LossyString].self, forKey: .featureFloors)
+        featureFloors = floors?.compactMapValues(\.value)
+    }
+
+    private struct LossyString: Decodable {
+        let value: String?
+
+        init(from decoder: any Decoder) throws {
+            value = try? decoder.singleValueContainer().decode(String.self)
+        }
     }
 
     public init(minSupported: String? = nil, featureFloors: [String: String]? = nil) {

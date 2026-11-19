@@ -9,9 +9,10 @@ public enum AppStoreLookup {
     /// and nothing in this package may trap. The store treats a `nil` URL as a
     /// source that never answers, which gates nothing.
     ///
-    /// The URL has no `country` parameter. The default storefront reports the
-    /// same marketing version as every other, and the notice only needs to
-    /// know whether a newer version exists.
+    /// The URL has no `country` parameter, so Apple's lookup answers for the
+    /// United States store. An app that is not on sale there gets no result,
+    /// which means no notice and no release of a wall for an OS that cannot
+    /// install the build.
     public static func url(appStoreID: String) -> URL? {
         URL(string: "https://itunes.apple.com/lookup?id=\(appStoreID)")
     }

@@ -106,7 +106,10 @@ public final class AppGateStore {
     ///   - currentVersion: this build's marketing version.
     ///   - osVersion: the OS this build is running on.
     ///   - defaults: where the caches and the dismissal are stored. Pass an App
-    ///     Group suite so extensions read the same gate.
+    ///     Group suite so extensions read the same gate. With `nil`, which a
+    ///     failed App Group initializer produces, nothing is kept: no answer
+    ///     is cached, so the gate stays open, and a dismissal lasts only for
+    ///     the session.
     ///   - keyPrefix: a prefix for every key, so the package's keys cannot
     ///     collide with the host's.
     ///   - fetch: the transport. A test injects one so it needs no network.
@@ -140,13 +143,6 @@ public final class AppGateStore {
                 .flatMap(URL.init(string:))
         #endif
         recompute()
-    }
-
-    deinit {
-        // The only cancellation the package makes. A refresh may outlive its
-        // caller on purpose. A refresh that outlives the store has two live
-        // requests and nothing to deliver them to.
-        inFlight?.cancel()
     }
 
     /// This binary's marketing version. An absent or malformed `Info.plist`
@@ -188,8 +184,8 @@ public final class AppGateStore {
     /// Cancelling the caller does not cancel the refresh. The intended call
     /// site is a view's `.task`, and the server may have just raised a floor
     /// when that view goes away. A fetch that started should finish and write
-    /// its cache. Releasing the store is the one case that cancels. See
-    /// `deinit`.
+    /// its cache. Releasing the store does not cancel it either: the refresh
+    /// keeps the store alive until it ends.
     public func refresh() async {
         if let inFlight {
             await inFlight.value
@@ -234,10 +230,14 @@ public final class AppGateStore {
         recompute()
     }
 
-    /// Refreshes only if either source is older than
-    /// ``foregroundRefreshInterval``. Call it on every foreground activation.
+    /// Refreshes if either source is older than ``foregroundRefreshInterval``,
+    /// or if the build is walled. Call it on every foreground activation.
+    ///
+    /// A walled build always fetches. The wall costs the user the whole app,
+    /// so a floor that was lowered must reach a walled install at its next
+    /// activation and not up to one interval later.
     public func refreshIfStale() async {
-        guard isStale else {
+        guard isStale || decision.state == .blocked else {
             // Still recompute, because a cache can expire without a fetch.
             recompute()
             return

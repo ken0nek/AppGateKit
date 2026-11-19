@@ -1,8 +1,20 @@
 import AppGateCore
 import Foundation
+import Synchronization
 import Testing
 
 @testable import AppGateClient
+
+/// A config body a test can change while a transport closure reads it.
+private final class ServedConfig: Sendable {
+    private let storage: Mutex<String>
+
+    init(_ body: String) { storage = Mutex(body) }
+
+    var body: String { storage.withLock { $0 } }
+
+    func serve(_ body: String) { storage.withLock { $0 = body } }
+}
 
 @MainActor
 final class AppGateStoreFetchTests {
@@ -58,6 +70,16 @@ final class AppGateStoreFetchTests {
         #expect(subject.state == .blocked)
     }
 
+    @Test("the config request goes to the config URL, and the lookup request to the lookup URL")
+    func requestsGoToTheRightURLs() async throws {
+        let transport = StubTransport(config: .ok("{}"), lookup: nil)
+        await store(transport).refresh()
+
+        let configURL = try #require(URL(string: "https://example.invalid/app-config.json"))
+        let lookupURL = try #require(AppStoreLookup.url(appStoreID: "123456789"))
+        #expect(Set(transport.requested) == [configURL, lookupURL])
+    }
+
     @Test("a failed refresh never clobbers a good cache")
     func failedRefreshKeepsLastGood() async {
         let good = store(StubTransport(config: .ok(#"{"min_supported":"2.0.0"}"#), lookup: nil))
@@ -90,6 +112,29 @@ final class AppGateStoreFetchTests {
         let garbage = store(StubTransport(config: .ok("<html>maintenance</html>"), lookup: nil))
         await garbage.refresh()
         #expect(garbage.minSupported == "2.0.0")
+    }
+
+    @Test("a failed lookup never clobbers a good lookup cache, whatever the config did")
+    func failedLookupKeepsLastGood() async {
+        let good = store(
+            StubTransport(
+                config: nil,
+                lookup: .ok(#"{"results":[{"version":"3.0.0","minimumOsVersion":"26.0"}]}"#)))
+        await good.refresh()
+        #expect(good.latestVersion == "3.0.0", "the lookup caches even when the config fails")
+
+        let failures: [AppGateResponse?] = [
+            .status(503, #"{"results":[{"version":"9.0.0"}]}"#),
+            .ok("<html></html>"),
+            .ok(#"{"results":[]}"#),
+            nil,
+        ]
+        for failure in failures {
+            let subject = store(StubTransport(config: .ok("{}"), lookup: failure))
+            await subject.refresh()
+            #expect(subject.latestVersion == "3.0.0")
+            #expect(subject.minimumOSVersion == "26.0")
+        }
     }
 
     @Test("an empty results array carries no version, so nothing is cached")
@@ -133,6 +178,49 @@ final class AppGateStoreFetchTests {
         #expect(subject.cacheAge(.config) == 0, "and the stamp moved, or the old body outlives it")
     }
 
+    @Test("the store writes the keys and formats that installed builds already read")
+    func persistedKeysAreFrozen() async {
+        let config = #"{"min_supported":"1.0.0","later":true}"#
+        let lookup = #"{"results":[{"version":"3.0.0","minimumOsVersion":"26.0"}]}"#
+        // No `keyPrefix:` on purpose. The default prefix is part of what is
+        // frozen, and every other test in this target passes one.
+        let subject = AppGateStore(
+            configURL: URL(string: "https://example.invalid/app-config.json")!,
+            appStoreID: "123456789",
+            currentVersion: "1.0.0",
+            osVersion: "26.0",
+            defaults: fixture.defaults,
+            fetch: StubTransport(config: .ok(config), lookup: .ok(lookup)).fetching,
+            now: clock.provider
+        )
+        await subject.refresh()
+        subject.dismissCurrentNotice()
+
+        let defaults = fixture.defaults
+        let stamp = clock.now.timeIntervalSince1970
+        #expect(defaults.data(forKey: "AppGate.config") == Data(config.utf8))
+        #expect(defaults.data(forKey: "AppGate.lookup") == Data(lookup.utf8))
+        #expect(defaults.object(forKey: "AppGate.configCachedAt") as? Double == stamp)
+        #expect(defaults.object(forKey: "AppGate.lookupCachedAt") as? Double == stamp)
+        #expect(defaults.string(forKey: "AppGate.dismissedVersion") == "3.0.0")
+    }
+
+    @Test("a lowered floor with a wrongly-typed field beside it still lowers the wall")
+    func typeSlipDoesNotKeepTheOldWall() async {
+        fixture.write(config: #"{"min_supported":"2.0.0"}"#, at: clock.now - 3600)
+        let subject = store(
+            StubTransport(
+                config: .ok(#"{"min_supported":"1.0.0","feature_floors":{"share":2}}"#),
+                lookup: nil))
+        #expect(subject.state == .blocked)
+
+        await subject.refresh()
+
+        #expect(subject.minSupported == "1.0.0")
+        #expect(subject.state == .open)
+        #expect(subject.featureFloors == [:])
+    }
+
     @Test("one stale source is enough to be due, whichever one it is")
     func eitherSourceStaleIsDue() {
         let subject = store(StubTransport(config: nil, lookup: nil))
@@ -162,13 +250,14 @@ final class AppGateStoreFetchTests {
     @Test("a source refreshed inside the interval is not due, and refreshIfStale does not refetch")
     func freshIsNotDue() async {
         let transport = StubTransport(
-            config: .ok(#"{"min_supported":"2.0.0"}"#),
+            config: .ok(#"{"min_supported":"1.0.0"}"#),
             lookup: .ok(#"{"results":[{"version":"3.0.0"}]}"#)
         )
         let subject = store(transport)
         await subject.refresh()
         #expect(transport.requested.count == 2)
         #expect(subject.isStale == false)
+        #expect(subject.state != .blocked)
 
         await subject.refreshIfStale()
         #expect(transport.requested.count == 2, "still fresh, so nothing was refetched")
@@ -187,6 +276,38 @@ final class AppGateStoreFetchTests {
         #expect(subject.isStale)
         await subject.refreshIfStale()
         #expect(transport.requested.count == 4)
+    }
+
+    @Test("a walled build refetches on every activation, however fresh the cache")
+    func walledBuildAlwaysRefetches() async {
+        let transport = StubTransport(
+            config: .ok(#"{"min_supported":"2.0.0"}"#),
+            lookup: .ok(#"{"results":[{"version":"3.0.0"}]}"#)
+        )
+        let subject = store(transport)
+        await subject.refresh()
+        #expect(subject.state == .blocked)
+        #expect(subject.isStale == false)
+
+        await subject.refreshIfStale()
+        #expect(transport.requested.count == 4, "a wall is not left standing on a cached answer")
+    }
+
+    @Test("a wall comes down on the next activation after the floor is lowered")
+    func loweredFloorReleasesOnActivation() async {
+        let config = ServedConfig(#"{"min_supported":"2.0.0"}"#)
+        let transport = StubTransport(answer: { url in
+            url.absoluteString.contains("itunes.apple.com")
+                ? AppGateResponse.ok(#"{"results":[{"version":"1.0.0"}]}"#)
+                : AppGateResponse.ok(config.body)
+        })
+        let subject = store(transport)
+        await subject.refresh()
+        #expect(subject.state == .blocked)
+
+        config.serve("{}")
+        await subject.refreshIfStale()
+        #expect(subject.state == .open)
     }
 
     @Test("refreshIfStale still recomputes when nothing is due")

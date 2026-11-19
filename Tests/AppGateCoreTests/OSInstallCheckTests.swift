@@ -43,6 +43,24 @@ struct OSInstallCheckTests {
         #expect(decision.state == .blocked)
     }
 
+    @Test("an OS newer than the build requires keeps the wall and the notice standing")
+    func osNewerThanRequiredKeepsTheGate() throws {
+        let version = try #require(AppVersion("2.0.0"))
+
+        let wall = AppGate.evaluate(
+            minSupported: "2.0.0", latest: nil, current: "1.0.0",
+            osVersion: "26.1", minimumOSVersion: "26.0"
+        )
+        #expect(wall.state == .blocked)
+        #expect(wall.diagnosis == .belowMinimumSupported(floor: version))
+
+        let notice = AppGate.evaluate(
+            minSupported: nil, latest: "2.0.0", current: "1.0.0",
+            osVersion: "27.0", minimumOSVersion: "26.0"
+        )
+        #expect(notice.state == .notice(latest: version))
+    }
+
     @Test("an OS that cannot install releases the wall, and says why")
     func osTooOldReleasesWall() throws {
         let minimumOS = try #require(AppVersion("26.0"))

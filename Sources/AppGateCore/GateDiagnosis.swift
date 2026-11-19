@@ -31,7 +31,8 @@ public enum GateDiagnosis: Equatable, Sendable {
     case belowMinimumSupported(floor: AppVersion)
     /// A newer version exists and has not been dismissed.
     case newerVersionAvailable(latest: AppVersion)
-    /// A newer version exists but this one was already dismissed.
+    /// A newer version exists, but the user already dismissed it or a later
+    /// one.
     case newerVersionDismissed(latest: AppVersion)
     /// A gate applied and was released, because the running OS cannot install
     /// the build the user would be sent to.

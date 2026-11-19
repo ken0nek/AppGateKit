@@ -32,4 +32,22 @@ extension AppGateSurface {
             return .notice(version: latest.description)
         }
     }
+
+    /// The view to show for an unsuppressed decision and the host's inputs.
+    /// The suppression rules run first, so a suppressed wall or notice
+    /// resolves to no view.
+    static func resolve(
+        _ decision: GateDecision,
+        capturingScreenshots: Bool,
+        hasCompletedOnboarding: Bool,
+        promptShownThisSession: Bool,
+        debugWallReleased: Bool
+    ) -> AppGateSurface {
+        let suppressed = decision.suppressed(
+            capturingScreenshots: capturingScreenshots,
+            hasCompletedOnboarding: hasCompletedOnboarding,
+            promptShownThisSession: promptShownThisSession
+        )
+        return resolve(suppressed.state, debugWallReleased: debugWallReleased)
+    }
 }

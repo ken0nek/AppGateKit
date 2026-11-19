@@ -56,6 +56,19 @@ final class AppGateStoreCacheTests {
         #expect(store().state == .blocked)
     }
 
+    @Test("the TTL is one day and the foreground interval is six hours")
+    func intervalsAreTheDocumentedOnes() {
+        #expect(AppGateStore.cacheTTL == 86_400)
+        #expect(AppGateStore.foregroundRefreshInterval == 21_600)
+    }
+
+    @Test("a cache exactly at its TTL has lapsed")
+    func cacheAtTheTTLIsAbsent() {
+        fixture.write(config: #"{"min_supported":"2.0.0"}"#, at: clock.now)
+        clock.advance(by: AppGateStore.cacheTTL)
+        #expect(store().state == .open)
+    }
+
     @Test("a cache stamp in the future reads as unusable, not infinitely fresh")
     func clockSkewGuard() {
         fixture.write(config: #"{"min_supported":"2.0.0"}"#, at: clock.now.addingTimeInterval(3600))

@@ -72,6 +72,20 @@ struct SuppressionTests {
         )
     }
 
+    @Test("with onboarding unfinished and a prompt shown, the reason given is onboarding")
+    func onboardingIsReportedBeforeThePrompt() {
+        let result = notice.suppressed(
+            capturingScreenshots: false, hasCompletedOnboarding: false,
+            promptShownThisSession: true
+        )
+        #expect(
+            result.diagnosis
+                == .suppressed(
+                    released: .notice(latest: AppVersion("1.5.0")!), reason: .onboardingIncomplete
+                )
+        )
+    }
+
     @Test("a prompt already shown this session does NOT suppress the wall")
     func promptDoesNotSuppressWall() {
         let result = wall.suppressed(

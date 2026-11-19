@@ -188,7 +188,8 @@
                     verbatim: """
                         Forcing takes effect immediately — the wall covers the app from wherever \
                         you are, including this screen. Pick "blocked" to verify the wall renders, \
-                        and "notice" to verify the nudge and its dismissal. Whatever your wall \
+                        and "notice" to verify the nudge renders. A forced notice ignores the \
+                        stored dismissal, so it shows again after a relaunch. Whatever your wall \
                         wires `releaseDebugWall` to is the way back here, and it sets this picker \
                         to Off for you. A Release build has neither.
                         """
@@ -267,8 +268,9 @@
         /// A cache age in whole minutes, hours or days. The screen shows how
         /// stale a cache is, not the exact time it was written.
         private func age(_ interval: TimeInterval?) -> String {
-            guard let interval else { return "never" }
-            let minutes = Int(interval / 60)
+            guard let interval, interval.isFinite else { return "never" }
+            guard interval >= 0 else { return "in the future" }
+            let minutes = Int(min(interval / 60, 1_000_000_000))
             if minutes < 1 { return "just now" }
             if minutes < 60 { return "\(minutes) min ago" }
             let hours = minutes / 60

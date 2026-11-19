@@ -88,7 +88,10 @@ public enum AppGate {
 
         // Compare parsed versions, so dismissing "1.4" also covers "1.4.0". The
         // lookup does not keep the component count stable between reads.
-        if let dismissedVersion, let dismissed = AppVersion(dismissedVersion), dismissed == newest {
+        // `>=` and not `==`: on release day the lookup can flap between two
+        // versions, and exact equality would ask about the older one again
+        // after the user dismissed the newer.
+        if let dismissedVersion, let dismissed = AppVersion(dismissedVersion), dismissed >= newest {
             return GateDecision(state: .open, diagnosis: .newerVersionDismissed(latest: newest))
         }
 

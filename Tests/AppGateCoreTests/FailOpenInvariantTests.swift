@@ -147,8 +147,8 @@ struct FailOpenInvariantTests {
         }
     }
 
-    @Test("a dismissal silences only an exact match, and never releases a wall")
-    func dismissalSilencesOnlyAnExactMatch() {
+    @Test("a dismissal silences only the same or an older version, and never releases a wall")
+    func dismissalSilencesOnlySameOrOlder() {
         for dismissed in Self.optionalCorpus {
             for current in Self.corpus where current.parses && Self.isBelow(current.text, "9.0.0") {
                 let walled = AppGate.evaluate(
@@ -173,7 +173,8 @@ struct FailOpenInvariantTests {
                     dismissedVersion: dismissed?.text
                 )
                 let shouldDismiss =
-                    dismissed.flatMap { AppVersion($0.text) } == AppVersion("9.0.0")
+                    dismissed.flatMap { AppVersion($0.text) }.map { $0 >= AppVersion("9.0.0")! }
+                    ?? false
                 let message = Self.describe(
                     minSupported: nil, latest: Sample(text: "9.0.0", parses: true),
                     current: current, dismissed: dismissed
@@ -187,7 +188,7 @@ struct FailOpenInvariantTests {
                 } else {
                     if case .open = noticed.state, case .newerVersionDismissed = noticed.diagnosis {
                         Issue.record(
-                            "a dismissal silenced a notice without an exact match — \(message)")
+                            "a dismissal silenced a newer notice — \(message)")
                     }
                 }
             }

@@ -11,8 +11,8 @@ It does three things:
   static JSON file and not as a dashboard toggle.
 - Fail-open behaviour. An unparseable version, an unreachable config, an
   expired cache and an OS that cannot install the newer build all resolve to no
-  gate. A wall shown by mistake cannot be undone without shipping a new binary
-  through review.
+  gate. A wall that a bug in the binary raises can only be fixed by a new
+  binary through review, so every doubt resolves to no wall.
 
 Other names for this are force update, kill switch, minimum supported version
 and update gate.
@@ -79,7 +79,9 @@ builds cannot read. Four rules follow.
 
 1. Every field is optional, on the server and in the app, permanently. A
    shipped build has to decode a cached blob that a different version of the
-   format wrote.
+   format wrote. A field's JSON type never changes. A value of the wrong type
+   reads as absent, and builds on 1.0.0 reject the whole config instead and
+   keep their previous cached config for up to a day.
 2. Unknown fields are ignored, so a field added later cannot break an older
    build's decode.
 3. The config carries no user-facing text. A string in the config could only be
@@ -95,7 +97,8 @@ One wrong floor walls every user, so the config follows four rules.
 
 1. No floor may exceed the version that is live on the App Store. A
    `min_supported` above it walls every user, including users who have just
-   updated, and nothing unwalls them faster than a new binary through review. A
+   updated, until each install fetches a corrected config, which a walled
+   build does at its next launch or foreground activation. A
    `feature_floors` entry above it disables that feature for every install in
    the same way. Check both against the same lookup the app reads, so the check
    and the app agree on what "live" means.
@@ -103,20 +106,26 @@ One wrong floor walls every user, so the config follows four rules.
    The app cannot parse anything else, and an unparseable floor means no gate,
    with no error.
 3. The file is served at the fixed path, as `application/json`, with status
-   200.
+   200, and with a short cache lifetime. A CDN that keeps serving an old body
+   keeps an old floor in force for as long as it does.
 4. The file is versioned as code and is not dashboard state. A change to it is
    reviewed and shipped like code.
 
-`scripts/verify-app-config.mjs` checks the first three. It is Node with no
+`scripts/verify-app-config.mjs` checks the first three. It also fails a
+`maintenance` field in any shape other than `{"until": "<string>"}`, so the
+reserved name cannot be taken by another shape. It is Node with no
 dependencies. Run it in the CI of whatever serves the file:
 
 ```
 node verify-app-config.mjs https://example.com/app-config.json 123456789
 ```
 
-If the lookup is unreachable, the script warns and does not fail, so an
+If the lookup does not answer, the script warns and does not fail, so an
 unrelated change is not blocked by Apple's uptime. If the lookup answers and a
-floor is above the live version, the script fails.
+floor is above the live version, the script fails. If the config sets a floor
+and the lookup answers but lists no app with that id, the script fails too,
+because a mistyped id would otherwise switch the check off. While the app is
+not on sale yet, add `--not-yet-released` after the id.
 
 ## What the package does not do
 
@@ -136,6 +145,10 @@ floor is above the live version, the script fails.
   the package and tested there.
 - **No targeting.** There are no cohorts, no percentage rollout and no
   per-country rules. Those need a server.
+- **No storefront choice.** The App Store lookup has no country, so Apple
+  answers for the United States store. An app that is not on sale there gets
+  no notice, and a wall is never released for an OS that cannot install the
+  build. The config floor still walls as configured.
 
 ## What your wall and notice must do
 

@@ -54,6 +54,22 @@ final class AppGateStoreDismissalTests {
         #expect(store().state == .notice(latest: AppVersion("2.1.0")!))
     }
 
+    @Test("a lookup that flaps back to an older version after a dismissal stays silent")
+    func flappingLookupStaysSilent() {
+        fixture.write(lookup: #"{"results":[{"version":"1.6.0"}]}"#, at: clock.now)
+        store().dismissCurrentNotice()
+
+        fixture.write(lookup: #"{"results":[{"version":"1.5.0"}]}"#, at: clock.now)
+        #expect(store().state == .open, "1.5 is older than the dismissed 1.6")
+
+        fixture.write(lookup: #"{"results":[{"version":"1.6.0"}]}"#, at: clock.now)
+        #expect(store().state == .open, "1.6 was dismissed")
+        #expect(store().dismissedVersion == "1.6.0", "the flap did not overwrite the dismissal")
+
+        fixture.write(lookup: #"{"results":[{"version":"1.7.0"}]}"#, at: clock.now)
+        #expect(store().state == .notice(latest: AppVersion("1.7.0")!))
+    }
+
     @Test("a dismissal persists the dotted form, so 2.0 and 2.0.0 are one dismissal")
     func dismissalPersistsDottedForm() {
         let subject = store()

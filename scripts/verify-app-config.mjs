@@ -9,13 +9,16 @@
  * The most important check is that no floor exceeds the version live on the
  * App Store. A `min_supported` above it walls every user, and a
  * `feature_floors` entry above it disables that feature for every install.
- * Neither can be undone without shipping a new binary through review. The
- * script reads the live version from the same lookup the app reads, so the
- * check and the app agree on what "live" means.
+ * Both last until each install fetches a corrected config. The script reads
+ * the live version from the same lookup the app reads, so the check and the
+ * app agree on what "live" means.
  *
- * Exits 1 on a violation and 0 otherwise. An unreachable lookup is a warning
- * and not a violation, so an unrelated change is not blocked by Apple's
- * uptime.
+ * Exits 1 on a violation and 0 otherwise. A lookup that does not answer is a
+ * warning and not a violation, so an unrelated change is not blocked by
+ * Apple's uptime. When the config sets a floor, a lookup that answers and
+ * lists no such app is a violation, because a mistyped id would otherwise
+ * turn the most important check off.
+ * Pass `--not-yet-released` after the id while the app is not on sale.
  */
 
 import { realpathSync } from "node:fs";
@@ -68,14 +71,14 @@ export function compareVersions(a, b) {
   return 0;
 }
 
-async function get(url) {
-  return await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+async function get(url, fetchImpl) {
+  return await fetchImpl(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
 }
 
-async function readConfig(configURL, report) {
+async function readConfig(configURL, report, fetchImpl) {
   let response;
   try {
-    response = await get(configURL);
+    response = await get(configURL, fetchImpl);
   } catch (error) {
     report.fail("unreachable", `${configURL} could not be fetched: ${error.message}`);
     return null;
@@ -97,12 +100,43 @@ async function readConfig(configURL, report) {
   }
 }
 
+const WHOLE_CONFIG_REJECTED =
+  "builds of the app that are already installed reject the whole config when one value " +
+  "has the wrong type, and keep their previous cached config for up to 24 hours";
+
+function wrongType(label, value) {
+  return `${label} is ${JSON.stringify(value)}, which is not a string; ${WHOLE_CONFIG_REJECTED}`;
+}
+
+/** `maintenance` is reserved for one shape, `{"until": "<string>"}`, and no
+ *  build reads it yet. Any other value fails, so the name cannot be taken by a
+ *  shape the reserved one would then have to stay compatible with. */
+function verifyMaintenance(value, report) {
+  const isReservedShape =
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.keys(value).length === 1 &&
+    typeof value.until === "string";
+  if (!isReservedShape) {
+    report.fail(
+      "maintenance-shape",
+      `maintenance is ${JSON.stringify(value)}; the name is reserved for ` +
+        '{"until": "<ISO 8601 time>"} and takes no other shape',
+    );
+    return;
+  }
+  report.warn('"maintenance" is reserved and no build reads it yet');
+}
+
 export function verifyShape(config, report) {
   if (config === null || typeof config !== "object" || Array.isArray(config)) {
     report.fail("not-an-object", "the config must be a JSON object");
     return;
   }
+  if ("maintenance" in config) verifyMaintenance(config.maintenance, report);
   for (const key of Object.keys(config)) {
+    if (key === "maintenance") continue;
     if (!KNOWN_KEYS.has(key)) {
       // An unknown key is allowed, because an old build ignores it. A new key
       // changes the config format, so add it to KNOWN_KEYS on purpose.
@@ -110,7 +144,9 @@ export function verifyShape(config, report) {
     }
   }
   if ("min_supported" in config && config.min_supported !== null) {
-    if (!isParseableVersion(config.min_supported)) {
+    if (typeof config.min_supported !== "string") {
+      report.fail("wrong-type", wrongType("min_supported", config.min_supported));
+    } else if (!isParseableVersion(config.min_supported)) {
       report.fail(
         "unparseable-floor",
         `min_supported ${JSON.stringify(config.min_supported)} is not dotted-numeric; ` +
@@ -121,10 +157,15 @@ export function verifyShape(config, report) {
   const floors = config.feature_floors;
   if (floors !== undefined && floors !== null) {
     if (typeof floors !== "object" || Array.isArray(floors)) {
-      report.fail("floors-shape", "feature_floors must be an object of name to version");
+      report.fail(
+        "floors-shape",
+        "feature_floors must be an object of name to version; " + WHOLE_CONFIG_REJECTED,
+      );
     } else {
       for (const [feature, floor] of Object.entries(floors)) {
-        if (!isParseableVersion(floor)) {
+        if (typeof floor !== "string") {
+          report.fail("wrong-type", wrongType(`feature_floors.${feature}`, floor));
+        } else if (!isParseableVersion(floor)) {
           report.fail(
             "unparseable-feature-floor",
             `feature_floors.${feature} is ${JSON.stringify(floor)}, not dotted-numeric; ` +
@@ -164,8 +205,8 @@ export function checkFloorsAgainstLive(config, live, report) {
         label === "min_supported" ? "floor-above-live" : "feature-floor-above-live",
         `${label} ${value} is ABOVE the live App Store version ${live}. Publishing this ` +
           (label === "min_supported"
-            ? "walls every user, including those who just updated, and no config change can " +
-              "unwall them faster than a new binary through review."
+            ? "walls every user, including those who just updated, until each install " +
+              "fetches a corrected config."
             : "disables that feature for every install, including the newest, until the " +
               "floor is lowered again."),
       );
@@ -175,21 +216,35 @@ export function checkFloorsAgainstLive(config, live, report) {
   }
 }
 
-async function verifyAgainstLiveVersion(config, appStoreID, report) {
+async function verifyAgainstLiveVersion(config, appStoreID, notYetReleased, report, fetchImpl) {
   if (floorsOf(config).length === 0) return;
 
-  let live;
+  let payload;
   try {
-    const response = await get(`https://itunes.apple.com/lookup?id=${appStoreID}`);
+    const response = await get(`https://itunes.apple.com/lookup?id=${appStoreID}`, fetchImpl);
     if (!response.ok) throw new Error(`lookup answered ${response.status}`);
-    const payload = await response.json();
-    live = payload.results?.[0]?.version;
-    if (!live) throw new Error("lookup carried no version");
+    payload = await response.json();
   } catch (error) {
     report.warn(
       `could not read the live App Store version (${error.message}); no floor was ` +
         "checked against it. Re-run with a network before raising any floor.",
     );
+    return;
+  }
+
+  const live = payload?.results?.[0]?.version;
+  if (!live) {
+    const detail =
+      `the lookup answered and lists no version for app id ${appStoreID} on its default ` +
+      "storefront, so no floor was checked against a live version";
+    if (notYetReleased) {
+      report.warn(`${detail}. Remove --not-yet-released once the app is on sale.`);
+    } else {
+      report.fail(
+        "app-not-found",
+        `${detail}. Check the id. If the app is not on sale yet, pass --not-yet-released.`,
+      );
+    }
     return;
   }
   if (!isParseableVersion(live)) {
@@ -199,28 +254,32 @@ async function verifyAgainstLiveVersion(config, appStoreID, report) {
   checkFloorsAgainstLive(config, live, report);
 }
 
-async function main(argv) {
-  const [configURL, appStoreID] = argv;
+/** Runs the whole check and returns the exit code. `fetch` and `out` (an
+ *  object with `error`, `warn` and `log`) are parameters, so a test can run it
+ *  with no network. */
+export async function run(argv, { fetch: fetchImpl = globalThis.fetch, out = console } = {}) {
+  const [configURL, appStoreID, ...flags] = argv;
+  const notYetReleased = flags.includes("--not-yet-released");
   if (!configURL || !appStoreID) {
-    console.error("usage: node verify-app-config.mjs <config-url> <app-store-id>");
+    out.error("usage: node verify-app-config.mjs <config-url> <app-store-id> [--not-yet-released]");
     return 2;
   }
 
   const report = createReport();
-  const config = await readConfig(configURL, report);
+  const config = await readConfig(configURL, report, fetchImpl);
   if (config !== null) {
     verifyShape(config, report);
-    await verifyAgainstLiveVersion(config, appStoreID, report);
+    await verifyAgainstLiveVersion(config, appStoreID, notYetReleased, report, fetchImpl);
   }
 
-  for (const line of report.warnings) console.warn(`⚠︎  ${line}`);
+  for (const line of report.warnings) out.warn(`⚠︎  ${line}`);
 
   if (report.violations.length > 0) {
-    console.error(`\n✗ app-config: ${report.violations.length} violation(s)\n`);
-    for (const { kind, detail } of report.violations) console.error(`  [${kind}] ${detail}`);
+    out.error(`\n✗ app-config: ${report.violations.length} violation(s)\n`);
+    for (const { kind, detail } of report.violations) out.error(`  [${kind}] ${detail}`);
     return 1;
   }
-  console.log("✓ app-config: shape, route and floor all check out");
+  out.log("✓ app-config: shape, route and floor all check out");
   return 0;
 }
 
@@ -230,5 +289,5 @@ async function main(argv) {
 // in the entry point's URL and leaves `argv[1]` as typed. Comparing the raw
 // values would make a symlinked invocation exit 0 without checking anything.
 if (process.argv[1] && fileURLToPath(import.meta.url) === realpathSync(process.argv[1])) {
-  process.exit(await main(process.argv.slice(2)));
+  process.exit(await run(process.argv.slice(2)));
 }

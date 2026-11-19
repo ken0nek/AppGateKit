@@ -17,8 +17,9 @@ public enum AppGateNoticePresentation: Equatable, Sendable {
 ///
 /// It is empty in a Release build. The only thing a wall needs from the
 /// package is the DEBUG release, and that must not exist in a shipped binary.
-/// The builder's signature is the same in both configurations, so the host's
-/// call site compiles in both. Only the members it can use differ.
+/// The builder's signature is the same in both configurations. The members
+/// are not, so a call site that names `releaseDebugWall` goes inside
+/// `#if DEBUG`.
 @MainActor
 public struct AppGateWallContext {
     #if DEBUG
@@ -76,9 +77,9 @@ public struct AppGateNoticeContext {
 /// stop the notice for a version the user may not have seen, and reporting it
 /// would count a decline nobody made.
 ///
-/// This is a free function and not an inline closure, because a SwiftUI
-/// `onDismiss` cannot be unit-tested and these rules need tests. A notice
-/// that did not record its dismissal would present again as soon as it closed.
+/// This is a free function, and the sequence that decides whether a close is
+/// the user's is in ``NoticePresenter``, because a SwiftUI `onDismiss` cannot
+/// be unit-tested and both rules need tests.
 @MainActor
 func resolveNoticeDismissal(
     store: AppGateStore,
@@ -109,20 +110,9 @@ private struct AppGateModifier<Wall: View, Notice: View>: ViewModifier {
 
     @Environment(\.scenePhase) private var scenePhase
 
-    /// The version the notice is announcing, copied into local state so the
-    /// presentation binding can clear it. The version string is the item's
-    /// identity, so a different version presents a new sheet.
-    @State private var presentedNotice: PresentedNotice?
-    /// The last version shown on screen. Stored separately because `onDismiss`
-    /// runs after a swipe has already cleared `presentedNotice`, and the
-    /// dismissal must be recorded against the version the user saw.
-    @State private var shownVersion: String?
-    /// Set by the notice's `accept`, read once by `onDismiss`.
-    @State private var noticeAccepted = false
-    /// The gate withdrew the notice while the sheet was up, so the user did
-    /// not cause the close that follows. Read once by `onDismiss` and cleared
-    /// there.
-    @State private var noticeWithdrawn = false
+    /// Which notice sheet is up and which close is recorded. The rules are in
+    /// ``NoticePresenter``, where they are tested.
+    @State private var presenter = NoticePresenter()
 
     #if DEBUG
         /// Never reset within a session. The wall stays down for the rest of
@@ -130,10 +120,6 @@ private struct AppGateModifier<Wall: View, Notice: View>: ViewModifier {
         /// recompute does not present it again.
         @State private var debugWallReleased = false
     #endif
-
-    private struct PresentedNotice: Identifiable, Equatable {
-        let id: String
-    }
 
     /// The state after the suppression rules, which `AppGateCore` implements
     /// and tests. This property only gathers the inputs.
@@ -143,17 +129,32 @@ private struct AppGateModifier<Wall: View, Notice: View>: ViewModifier {
         #else
             let released = false
         #endif
-        let suppressed = store.decision.suppressed(
+        return .resolve(
+            store.decision,
             capturingScreenshots: capturingScreenshots,
             hasCompletedOnboarding: hasCompletedOnboarding,
-            promptShownThisSession: promptShownThisSession
+            promptShownThisSession: promptShownThisSession,
+            debugWallReleased: released
         )
-        return .resolve(suppressed.state, debugWallReleased: released)
     }
 
     private var noticeVersion: String? {
         guard case .notice(let version) = surface else { return nil }
         return version
+    }
+
+    /// The sheet's item. Built from the projected `$presenter`, which is
+    /// `Sendable`, and not from `self`, because the closures a `Binding`
+    /// takes are `@Sendable` and the modifier holds closures that are not.
+    private var noticeItem: Binding<PresentedNotice?> {
+        let presenter = $presenter
+        return Binding(
+            get: { presenter.wrappedValue.item },
+            // A plain `$state` binding would lose the fact that SwiftUI
+            // cleared the item, and a close the gate caused would look the
+            // same as one the user made.
+            set: { if $0 == nil { presenter.wrappedValue.userClosed() } }
+        )
     }
 
     func body(content: Content) -> some View {
@@ -162,9 +163,10 @@ private struct AppGateModifier<Wall: View, Notice: View>: ViewModifier {
             // handle. On failure the caches stay as they were.
             .task { await store.refresh() }
             .onChange(of: scenePhase) { _, phase in
-                // This handles foregrounding, not launch. `onChange` does not
-                // fire for the initial value, so it never runs alongside the
-                // task above. `.task(id: scenePhase)` would run at launch too,
+                // This handles foregrounding. `onChange` does not fire for the
+                // initial value, but iOS also delivers an activation at cold
+                // launch, and the store joins that call to the refresh already
+                // in flight. `.task(id: scenePhase)` would run at launch too,
                 // and would cancel the refresh when the view disappears, which
                 // the store's `refresh()` documentation rules out.
                 // iOS suspends apps for days instead of cold-launching them, so
@@ -174,29 +176,19 @@ private struct AppGateModifier<Wall: View, Notice: View>: ViewModifier {
                 Task { await store.refreshIfStale() }
             }
             .onChange(of: noticeVersion, initial: true) { _, version in
-                // Assign the flag on every transition and never only set it. A
-                // withdrawal may not reach `onDismiss`, because the sheet was
-                // still presenting. The next notice then clears the flag, so
-                // the flag does not suppress that notice's dismissal.
-                noticeWithdrawn = version == nil && presentedNotice != nil
-                presentedNotice = version.map(PresentedNotice.init(id:))
-                if let version { shownVersion = version }
+                presenter.gateChanged(to: version)
             }
             .appGateWall(isPresented: surface == .wall) { wallContent }
             .appGateNotice(
                 noticePresentation,
-                item: $presentedNotice,
+                item: noticeItem,
                 onDismiss: {
-                    let withdrawn = noticeWithdrawn
-                    noticeWithdrawn = false
-                    let accepted = noticeAccepted
-                    noticeAccepted = false
-                    guard let version = shownVersion else { return }
+                    guard let close = presenter.sheetDismissed() else { return }
                     resolveNoticeDismissal(
                         store: store,
-                        version: version,
-                        accepted: accepted,
-                        withdrawn: withdrawn,
+                        version: close.version,
+                        accepted: close.accepted,
+                        withdrawn: false,
                         report: onNoticeDismissed
                     )
                 },
@@ -216,8 +208,12 @@ private struct AppGateModifier<Wall: View, Notice: View>: ViewModifier {
         return wall(context).interactiveDismissDisabled()
     }
 
-    private func noticeContent(_ item: PresentedNotice) -> Notice {
-        notice(AppGateNoticeContext(version: item.id, accept: { noticeAccepted = true }))
+    private func noticeContent(_ item: PresentedNotice) -> some View {
+        notice(
+            AppGateNoticeContext(
+                version: item.id, accept: { presenter.accept(version: item.id) })
+        )
+        .onAppear { presenter.appeared(version: item.id) }
     }
 
     #if DEBUG
@@ -263,8 +259,12 @@ extension View {
     ///             if !accepted { analytics.noticeDeclined(version) }
     ///         },
     ///         wall: { context in
-    ///             UpdateWallView(debugDismiss: context.releaseDebugWall)
-    ///                 .task { analytics.wallShown() }
+    ///             #if DEBUG
+    ///                 let wall = UpdateWallView(debugDismiss: context.releaseDebugWall)
+    ///             #else
+    ///                 let wall = UpdateWallView(debugDismiss: nil)
+    ///             #endif
+    ///             wall.task { analytics.wallShown() }
     ///         },
     ///         notice: { context in
     ///             UpdateNoticeSheet(latest: context.version, onUpdate: context.accept)
@@ -284,7 +284,10 @@ extension View {
     ///     Leave it at `true` if you have no onboarding.
     ///   - promptShownThisSession: another prompt has already used this
     ///     session's modal. Suppresses the notice only. Pass `true` when any
-    ///     prompt of yours has shown, whichever one it was.
+    ///     other prompt of yours has shown. Do not set it because this notice
+    ///     appeared: the notice would withdraw itself with nothing recorded,
+    ///     and show again at every launch. If the notice counts as this
+    ///     session's prompt, set the flag from `onNoticeDismissed`.
     ///   - noticePresentation: sheet or full screen. The wall is always full
     ///     screen.
     ///   - onNoticeDismissed: called when the user closes the notice, however

@@ -11,6 +11,7 @@ import {
   compareVersions,
   createReport,
   isParseableVersion,
+  run,
   verifyShape,
 } from "./verify-app-config.mjs";
 
@@ -103,15 +104,58 @@ test("verifyShape rejects a non-string floor", () => {
   const report = createReport();
   verifyShape({ min_supported: 130 }, report);
   assert.equal(report.violations.length, 1);
+  assert.equal(report.violations[0].kind, "wrong-type");
+});
+
+test("verifyShape calls a non-string feature floor a wrong type, null included", () => {
+  for (const floor of [2, null, ["2.0"], {}, true]) {
+    const report = createReport();
+    verifyShape({ feature_floors: { share: floor } }, report);
+    assert.equal(report.violations.length, 1, JSON.stringify(floor));
+    assert.equal(report.violations[0].kind, "wrong-type");
+    assert.match(report.violations[0].detail, /reject the whole config/);
+  }
+});
+
+test("verifyShape still calls an unparseable string an unparseable floor", () => {
+  const report = createReport();
+  verifyShape({ min_supported: "2.x" }, report);
   assert.equal(report.violations[0].kind, "unparseable-floor");
 });
 
 test("verifyShape warns, but does not fail, on an unknown key", () => {
   const report = createReport();
-  verifyShape({ maintenance: { until: "…" } }, report);
+  verifyShape({ rollout: { percent: 10 } }, report);
   assert.equal(report.violations.length, 0);
   assert.equal(report.warnings.length, 1);
   assert.match(report.warnings[0], /unknown key/);
+});
+
+test("verifyShape warns, but does not fail, on maintenance in its reserved shape", () => {
+  const report = createReport();
+  verifyShape({ maintenance: { until: "2026-12-01T09:00:00Z" } }, report);
+  assert.equal(report.violations.length, 0);
+  assert.equal(report.warnings.length, 1);
+  assert.match(report.warnings[0], /reserved/);
+});
+
+test("verifyShape rejects maintenance in any other shape", () => {
+  const shapes = [
+    null,
+    "down until Monday",
+    42,
+    [],
+    {},
+    { until: 1764579600 },
+    { until: null },
+    { until: "2026-12-01T09:00:00Z", message: "Back soon" },
+  ];
+  for (const maintenance of shapes) {
+    const report = createReport();
+    verifyShape({ maintenance }, report);
+    assert.equal(report.violations.length, 1, JSON.stringify(maintenance));
+    assert.equal(report.violations[0].kind, "maintenance-shape", JSON.stringify(maintenance));
+  }
 });
 
 test("verifyShape rejects a non-object config", () => {
@@ -186,6 +230,126 @@ test("checkFloorsAgainstLive does not double-count an unparseable floor", () => 
   const report = createReport();
   checkFloorsAgainstLive({ feature_floors: { share: "2.x" } }, "2.0.0", report);
   assert.equal(report.violations.length, 0);
+});
+
+const CONFIG_URL = "https://example.com/app-config.json";
+const APP_ID = "123456789";
+
+/** A fake `fetch`. `config` and `lookup` are each `{status, type, body}`, or
+ *  an Error to throw. */
+function fakeFetch({ config, lookup }) {
+  return async (url) => {
+    const answer = String(url).includes("itunes.apple.com") ? lookup : config;
+    if (answer instanceof Error) throw answer;
+    return new Response(answer.body, {
+      status: answer.status ?? 200,
+      headers: { "content-type": answer.type ?? "application/json" },
+    });
+  };
+}
+
+function quiet() {
+  const lines = { error: [], warn: [], log: [] };
+  return {
+    lines,
+    out: {
+      error: (line) => lines.error.push(line),
+      warn: (line) => lines.warn.push(line),
+      log: (line) => lines.log.push(line),
+    },
+  };
+}
+
+const GOOD_CONFIG = { body: '{"min_supported":"1.3.0"}' };
+const GOOD_LOOKUP = { body: '{"resultCount":1,"results":[{"version":"2.0.0"}]}' };
+
+async function runWith(answers, extraArgs = []) {
+  const { lines, out } = quiet();
+  const code = await run([CONFIG_URL, APP_ID, ...extraArgs], { fetch: fakeFetch(answers), out });
+  return { code, lines };
+}
+
+test("run passes a good config against a good lookup", async () => {
+  const { code } = await runWith({ config: GOOD_CONFIG, lookup: GOOD_LOOKUP });
+  assert.equal(code, 0);
+});
+
+test("run fails a config that is not served with status 200", async () => {
+  const { code, lines } = await runWith({
+    config: { status: 404, body: "{}" },
+    lookup: GOOD_LOOKUP,
+  });
+  assert.equal(code, 1);
+  assert.match(lines.error.join("\n"), /\[status\]/);
+});
+
+test("run fails a config that is not served as application/json", async () => {
+  const { code, lines } = await runWith({
+    config: { type: "text/html", body: '{"min_supported":"1.3.0"}' },
+    lookup: GOOD_LOOKUP,
+  });
+  assert.equal(code, 1);
+  assert.match(lines.error.join("\n"), /\[content-type\]/);
+});
+
+test("run fails a body that is not JSON", async () => {
+  const { code, lines } = await runWith({ config: { body: "<html></html>" }, lookup: GOOD_LOOKUP });
+  assert.equal(code, 1);
+  assert.match(lines.error.join("\n"), /\[not-json\]/);
+});
+
+test("run fails a config that cannot be fetched", async () => {
+  const { code, lines } = await runWith({ config: new Error("offline"), lookup: GOOD_LOOKUP });
+  assert.equal(code, 1);
+  assert.match(lines.error.join("\n"), /\[unreachable\]/);
+});
+
+test("run fails a floor above the live version", async () => {
+  const { code, lines } = await runWith({
+    config: { body: '{"min_supported":"3.0.0"}' },
+    lookup: GOOD_LOOKUP,
+  });
+  assert.equal(code, 1);
+  assert.match(lines.error.join("\n"), /\[floor-above-live\]/);
+});
+
+test("run only warns when the lookup is unreachable", async () => {
+  const { code, lines } = await runWith({ config: GOOD_CONFIG, lookup: new Error("offline") });
+  assert.equal(code, 0);
+  assert.equal(lines.warn.length, 1);
+});
+
+test("run only warns when the lookup answers with a server error", async () => {
+  const { code, lines } = await runWith({ config: GOOD_CONFIG, lookup: { status: 503, body: "" } });
+  assert.equal(code, 0);
+  assert.equal(lines.warn.length, 1);
+});
+
+test("run fails when the lookup answers and knows no such app", async () => {
+  const { code, lines } = await runWith({
+    config: GOOD_CONFIG,
+    lookup: { body: '{"resultCount":0,"results":[]}' },
+  });
+  assert.equal(code, 1);
+  assert.match(lines.error.join("\n"), /\[app-not-found\]/);
+});
+
+test("run only warns about an unknown app when told the app is not released yet", async () => {
+  const { code, lines } = await runWith(
+    { config: GOOD_CONFIG, lookup: { body: '{"resultCount":0,"results":[]}' } },
+    ["--not-yet-released"],
+  );
+  assert.equal(code, 0);
+  assert.equal(lines.warn.length, 1);
+});
+
+test("run does not ask the lookup when the config sets no floor", async () => {
+  const { code, lines } = await runWith({
+    config: { body: "{}" },
+    lookup: new Error("must not be called"),
+  });
+  assert.equal(code, 0);
+  assert.equal(lines.warn.length, 0, "a lookup that was asked and threw would have warned");
 });
 
 // Node resolves symlinks in the entry point's URL and leaves argv[1] as typed.

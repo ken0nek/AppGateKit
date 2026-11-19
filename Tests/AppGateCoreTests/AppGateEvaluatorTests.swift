@@ -67,6 +67,16 @@ struct AppGateEvaluatorTests {
         #expect(decision.state == .notice(latest: AppVersion("1.5.0")!))
     }
 
+    @Test("dismissing a newer version silences an older one the lookup reports")
+    func newerDismissalSilencesOlder() throws {
+        let latest = try #require(AppVersion("1.5.0"))
+        let decision = AppGate.evaluate(
+            minSupported: nil, latest: "1.5.0", current: "1.3.0", dismissedVersion: "1.6.0"
+        )
+        #expect(decision.state == .open)
+        #expect(decision.diagnosis == .newerVersionDismissed(latest: latest))
+    }
+
     @Test("an unparseable dismissal does not silence the notice")
     func unparseableDismissalDoesNotSilence() {
         let decision = AppGate.evaluate(

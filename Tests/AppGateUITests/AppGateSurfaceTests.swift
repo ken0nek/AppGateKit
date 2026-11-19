@@ -38,4 +38,51 @@ struct AppGateSurfaceTests {
         let state = GateState.notice(latest: try #require(AppVersion("2.0")))
         #expect(AppGateSurface.resolve(state, debugWallReleased: true) == .notice(version: "2.0"))
     }
+
+    private static let wall = GateDecision(
+        state: .blocked, diagnosis: .belowMinimumSupported(floor: AppVersion("2.0.0")!))
+    private static let notice = GateDecision(
+        state: .notice(latest: AppVersion("1.5.0")!),
+        diagnosis: .newerVersionAvailable(latest: AppVersion("1.5.0")!))
+
+    @Test("unfinished onboarding hides the notice and not the wall")
+    func onboardingReachesTheNoticeRule() {
+        #expect(
+            AppGateSurface.resolve(
+                Self.notice, capturingScreenshots: false, hasCompletedOnboarding: false,
+                promptShownThisSession: false, debugWallReleased: false) == .none)
+        #expect(
+            AppGateSurface.resolve(
+                Self.wall, capturingScreenshots: false, hasCompletedOnboarding: false,
+                promptShownThisSession: false, debugWallReleased: false) == .wall)
+    }
+
+    @Test("a prompt shown this session hides the notice and not the wall")
+    func promptReachesTheNoticeRule() {
+        #expect(
+            AppGateSurface.resolve(
+                Self.notice, capturingScreenshots: false, hasCompletedOnboarding: true,
+                promptShownThisSession: true, debugWallReleased: false) == .none)
+        #expect(
+            AppGateSurface.resolve(
+                Self.wall, capturingScreenshots: false, hasCompletedOnboarding: true,
+                promptShownThisSession: true, debugWallReleased: false) == .wall)
+    }
+
+    @Test("a screenshot run hides the wall too")
+    func captureReachesBothRules() {
+        #expect(
+            AppGateSurface.resolve(
+                Self.wall, capturingScreenshots: true, hasCompletedOnboarding: true,
+                promptShownThisSession: false, debugWallReleased: false) == .none)
+    }
+
+    @Test("with nothing suppressing it, the notice shows")
+    func unsuppressedNoticeShows() {
+        #expect(
+            AppGateSurface.resolve(
+                Self.notice, capturingScreenshots: false, hasCompletedOnboarding: true,
+                promptShownThisSession: false, debugWallReleased: false)
+                == .notice(version: "1.5.0"))
+    }
 }

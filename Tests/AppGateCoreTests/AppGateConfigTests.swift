@@ -29,6 +29,42 @@ struct AppGateConfigTests {
         #expect(empty.featureFloors == nil)
     }
 
+    @Test("a floor of the wrong type reads as absent, and the other field survives")
+    func wrongTypedFloorIsAbsent() throws {
+        let config = try decode(#"{"min_supported":1.3,"feature_floors":{"share":"2.2.0"}}"#)
+        #expect(config.minSupported == nil)
+        #expect(config.featureFloors == ["share": "2.2.0"])
+    }
+
+    @Test(
+        "a feature floor of the wrong type is dropped alone",
+        arguments: [
+            #"{"min_supported":"1.3.0","feature_floors":{"share":2,"export":"3.0.0"}}"#,
+            #"{"min_supported":"1.3.0","feature_floors":{"share":null,"export":"3.0.0"}}"#,
+            #"{"min_supported":"1.3.0","feature_floors":{"share":["2"],"export":"3.0.0"}}"#,
+        ]
+    )
+    func wrongTypedFeatureFloorIsDropped(json: String) throws {
+        let config = try decode(json)
+        #expect(config.minSupported == "1.3.0")
+        #expect(config.featureFloors == ["export": "3.0.0"])
+    }
+
+    @Test("feature_floors of the wrong shape reads as absent, and the floor survives")
+    func wrongShapedFeatureFloorsIsAbsent() throws {
+        let config = try decode(#"{"min_supported":"1.3.0","feature_floors":[]}"#)
+        #expect(config.minSupported == "1.3.0")
+        #expect(config.featureFloors == nil)
+    }
+
+    @Test(
+        "a body that is not a JSON object is still not a config",
+        arguments: ["[]", "null", "\"1.3.0\"", "<html></html>"]
+    )
+    func nonObjectStillFails(json: String) {
+        #expect(throws: (any Error).self) { try decode(json) }
+    }
+
     @Test("a feature with no floor is never blocked")
     func noFloorNeverBlocks() {
         let config = AppGateConfig(minSupported: "1.0.0")

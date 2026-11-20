@@ -126,4 +126,51 @@ struct NoticePresenterTests {
         presenter.userClosed()
         #expect(presenter.sheetDismissed() == nil)
     }
+
+    @Test("a sheet that appears twice in one presentation is one showing")
+    func repeatedAppearanceIsOneShowing() {
+        var presenter = NoticePresenter()
+        presenter.gateChanged(to: "1.5")
+        let first = presenter.appeared(version: "1.5")
+        let second = presenter.appeared(version: "1.5")
+        #expect(first)
+        #expect(!second, "SwiftUI appeared the same sheet again")
+    }
+
+    @Test("a notice the gate withdraws and asks for again is a new showing")
+    func returnAfterWithdrawalIsANewShowing() {
+        var presenter = showing("1.5")
+        presenter.gateChanged(to: nil)
+        presenter.gateChanged(to: "1.5")
+        let first = presenter.appeared(version: "1.5")
+        let second = presenter.appeared(version: "1.5")
+        #expect(first, "the wall lifted and the notice is back")
+        #expect(!second)
+    }
+
+    @Test("a newer version replacing the sheet is a new showing")
+    func replacementIsANewShowing() {
+        var presenter = showing("1.5")
+        presenter.gateChanged(to: "1.6")
+        let shown = presenter.appeared(version: "1.6")
+        #expect(shown)
+    }
+
+    @Test("a replaced sheet that appears late is not a showing")
+    func staleAppearanceIsNotAShowing() {
+        var presenter = NoticePresenter()
+        presenter.gateChanged(to: "1.5")
+        presenter.gateChanged(to: "1.6")
+        let stale = presenter.appeared(version: "1.5")
+        let current = presenter.appeared(version: "1.6")
+        #expect(!stale)
+        #expect(current)
+    }
+
+    @Test("an appearance with no notice asked for is not a showing")
+    func strayAppearanceIsNotAShowing() {
+        var presenter = NoticePresenter()
+        let shown = presenter.appeared(version: "1.5")
+        #expect(!shown)
+    }
 }

@@ -137,8 +137,9 @@ not on sale yet, add `--not-yet-released` after the id.
   sheet in one app and a full-screen "what's new" in another. Packaged versions
   of the two views would take more parameters than they have content.
 - **No analytics.** A store that emitted on state change would count walls
-  nobody saw. Send your own signals from the presenting layer, when a view
-  appears.
+  nobody saw. Send your own signals from the presenting layer: the notice's
+  from `onNoticeShown`, which is called once each time the notice is
+  presented, and the wall's when your wall appears.
 - **No suppression inputs.** The app knows whether a screenshot run is in
   progress, whether onboarding is done and whether another modal has already
   shown this session, and it passes those in. The rules that use them are in

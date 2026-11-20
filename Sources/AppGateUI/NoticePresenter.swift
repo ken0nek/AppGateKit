@@ -34,9 +34,15 @@ struct NoticePresenter: Equatable, Sendable {
         item = version.map(PresentedNotice.init(id:))
     }
 
-    /// The sheet for `version` is on screen.
-    mutating func appeared(version: String) {
+    /// The sheet for `version` is on screen. Returns `true` for the first
+    /// appearance of the sheet the gate asks for, which is the showing to
+    /// report. SwiftUI can make one sheet appear twice, as when the wall's
+    /// cover dismisses, so an appearance is not a showing.
+    @discardableResult
+    mutating func appeared(version: String) -> Bool {
+        let isNewShowing = item?.id == version && appearedVersion != version
         appearedVersion = version
+        return isNewShowing
     }
 
     /// The host's notice reported that the user accepted `version`.

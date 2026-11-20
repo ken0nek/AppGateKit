@@ -104,6 +104,7 @@ private struct AppGateModifier<Wall: View, Notice: View>: ViewModifier {
     let hasCompletedOnboarding: Bool
     let promptShownThisSession: Bool
     let noticePresentation: AppGateNoticePresentation
+    let onNoticeShown: ((String) -> Void)?
     let onNoticeDismissed: ((String, Bool) -> Void)?
     let wall: (AppGateWallContext) -> Wall
     let notice: (AppGateNoticeContext) -> Notice
@@ -213,7 +214,9 @@ private struct AppGateModifier<Wall: View, Notice: View>: ViewModifier {
             AppGateNoticeContext(
                 version: item.id, accept: { presenter.accept(version: item.id) })
         )
-        .onAppear { presenter.appeared(version: item.id) }
+        .onAppear {
+            if presenter.appeared(version: item.id) { onNoticeShown?(item.id) }
+        }
     }
 
     #if DEBUG
@@ -246,8 +249,10 @@ extension View {
     /// everything, and the notice must not depend on a tab the user may never
     /// visit.
     ///
-    /// Send analytics from the views you return. A `.task` inside your builder
-    /// runs when the view appears, which is the event to count. A store that
+    /// To count showings of the notice, use the overload that takes
+    /// `onNoticeShown`, and not a `.task` in your notice. SwiftUI can run that
+    /// task twice for one showing, as when the wall comes down and the notice
+    /// returns. Send the wall's signal from the view you return. A store that
     /// emitted on state change would count walls nobody saw.
     ///
     /// ```swift
@@ -268,7 +273,6 @@ extension View {
     ///         },
     ///         notice: { context in
     ///             UpdateNoticeSheet(latest: context.version, onUpdate: context.accept)
-    ///                 .task { analytics.noticeShown(context.version) }
     ///         }
     ///     )
     /// ```
@@ -315,6 +319,53 @@ extension View {
                 hasCompletedOnboarding: hasCompletedOnboarding,
                 promptShownThisSession: promptShownThisSession,
                 noticePresentation: noticePresentation,
+                onNoticeShown: nil,
+                onNoticeDismissed: onNoticeDismissed,
+                wall: wall,
+                notice: notice
+            )
+        )
+    }
+
+    /// Presents the wall and the notice as the overload without
+    /// `onNoticeShown` does, and reports each showing of the notice.
+    ///
+    /// ```swift
+    /// ContentView()
+    ///     .appGate(
+    ///         store,
+    ///         onNoticeShown: { version in analytics.noticeShown(version) },
+    ///         wall: { _ in UpdateWallView() },
+    ///         notice: { context in
+    ///             UpdateNoticeSheet(latest: context.version, onUpdate: context.accept)
+    ///         }
+    ///     )
+    /// ```
+    ///
+    /// - Parameter onNoticeShown: called with the announced version once each
+    ///   time the notice is presented, when it first appears. A notice the
+    ///   gate withdraws and presents again, as after the wall lifts, is a new
+    ///   showing and calls it again. The other parameters are those of the
+    ///   overload without it.
+    public func appGate<Wall: View, Notice: View>(
+        _ store: AppGateStore,
+        capturingScreenshots: Bool = false,
+        hasCompletedOnboarding: Bool = true,
+        promptShownThisSession: Bool = false,
+        noticePresentation: AppGateNoticePresentation = .sheet,
+        onNoticeShown: @escaping (String) -> Void,
+        onNoticeDismissed: ((String, Bool) -> Void)? = nil,
+        @ViewBuilder wall: @escaping (AppGateWallContext) -> Wall,
+        @ViewBuilder notice: @escaping (AppGateNoticeContext) -> Notice
+    ) -> some View {
+        modifier(
+            AppGateModifier(
+                store: store,
+                capturingScreenshots: capturingScreenshots,
+                hasCompletedOnboarding: hasCompletedOnboarding,
+                promptShownThisSession: promptShownThisSession,
+                noticePresentation: noticePresentation,
+                onNoticeShown: onNoticeShown,
                 onNoticeDismissed: onNoticeDismissed,
                 wall: wall,
                 notice: notice
